@@ -1,0 +1,41 @@
+Quantitative Metrics Summary:
+  Algorithm: Hough Transform
+    Avg F1 Score: 0.686
+    Avg Precision: 0.956
+    Avg Recall: 0.542
+    Avg True Positives: 1.91
+    Avg False Positives: 0.05
+    Avg False Negatives: 1.65
+    Avg X Diff (matched pts): 3.03 px
+    Min X Diff (matched pts, avg over images): N/A px
+    Max X Diff (matched pts, avg over images): N/A px
+    Std Dev X Diff (matched pts, avg over images): N/A px
+    Avg Total GT Points (at h_samples): 130.98
+    Avg Total Detected Points (at h_samples): 70.33
+    Avg %% GT Points Matched: 44.04%
+    Avg %% Detected Points Matched: 82.98%
+    Avg Points per Matched GT Lane: 29.99
+    Avg Execution Time per Image: 0.0065 seconds
+    Avg FPS: 153.40
+    Total Images Processed for this algo: 194
+
+  Algorithm: Adv. Sliding Window
+    Avg F1 Score: 0.662
+    Avg Precision: 0.925
+    Avg Recall: 0.521
+    Avg True Positives: 1.85
+    Avg False Positives: 0.15
+    Avg False Negatives: 1.71
+    Avg X Diff (matched pts): 2.91 px
+    Min X Diff (matched pts, avg over images): N/A px
+    Max X Diff (matched pts, avg over images): N/A px
+    Std Dev X Diff (matched pts, avg over images): N/A px
+    Avg Total GT Points (at h_samples): 130.98
+    Avg Total Detected Points (at h_samples): 72.00
+    Avg %% GT Points Matched: 46.94%
+    Avg %% Detected Points Matched: 88.50%
+    Avg Points per Matched GT Lane: 32.78
+    Avg Execution Time per Image: 0.0299 seconds
+    Avg FPS: 33.45
+    Total Images Processed for this algo: 194
+

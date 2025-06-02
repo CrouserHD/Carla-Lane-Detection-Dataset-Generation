@@ -4,3 +4,5 @@ pygame
 matplotlib
 opencv-python
 Pillow
+tabulate
+colorama

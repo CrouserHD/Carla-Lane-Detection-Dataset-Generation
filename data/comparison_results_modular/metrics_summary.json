@@ -1,0 +1,25 @@
+Quantitative Metrics Summary:
+  Algorithm: Hough Transform
+    Avg F1 Score: 0.729
+    Avg Precision: 0.921
+    Avg Recall: 0.605
+    Avg True Positives: 1.81
+    Avg False Positives: 0.16
+    Avg False Negatives: 1.19
+    Avg X Diff (matched pts): 4.31 px
+    Avg Execution Time per Image: 0.0037 seconds
+    Avg FPS: 273.50
+    Total Images Processed for this algo: 70
+
+  Algorithm: Adv. Sliding Window
+    Avg F1 Score: 0.600
+    Avg Precision: 0.750
+    Avg Recall: 0.500
+    Avg True Positives: 1.50
+    Avg False Positives: 0.50
+    Avg False Negatives: 1.50
+    Avg X Diff (matched pts): 3.78 px
+    Avg Execution Time per Image: 0.0110 seconds
+    Avg FPS: 90.70
+    Total Images Processed for this algo: 70
+

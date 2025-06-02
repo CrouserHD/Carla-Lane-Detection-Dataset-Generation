@@ -2,8 +2,12 @@
 
 *.pyc
 *.pth
-
+*.jpg
+*.png
+*.mp4
+*.avi
 *vscode
+*.npy
 
 **/build
 
