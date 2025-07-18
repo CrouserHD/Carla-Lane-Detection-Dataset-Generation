@@ -454,15 +454,15 @@ if __name__ == '__main__':
 
     # Attempt to import ROI and Perspective parameters from the project's config file
     try:
-        # Adjust path to import from lane_comparison_config.py
-        # This script is in src/lane_comparison/algorithms/
-        # Config is in src/lane_comparison/
+        # Adjust path to import from config.py
+        # This script is in src/algorithms/
+        # Config is in src/
         sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-        from lane_comparison_config import (
+        from config import (
             ROI_Y_RATIO, ROI_X_START_RATIO, ROI_X_END_RATIO, ROI_Y_END_RATIO,
             ROI_BOTTOM_WIDTH_FACTOR_OFFSET, ASW_SRC_RATIOS, ASW_DST_RATIOS
         )
-        print("Successfully imported ROI and Perspective parameters from lane_comparison_config.py")
+        print("Successfully imported ROI and Perspective parameters from config.py")
 
         # Define example_roi_ratios using imported config values
         # Order for fillPoly: TL, TR, BR, BL
@@ -497,8 +497,9 @@ if __name__ == '__main__':
         persp_dst_ratios_tl_tr_bl_br = ASW_DST_RATIOS
 
     except ImportError as e:
-        print(f"Could not import from lane_comparison_config.py: {e}")
-        print("Using default hardcoded ROI and Perspective parameters for standalone test.")
+        print(f"Could not import from config.py: {e}")
+        # Define fallback values if config is not available
+        print("Using fallback values for ROI and Perspective.")
         # Fallback to original hardcoded values if import fails
         example_roi_ratios = [
             [0.40, 0.60],  # Top-left

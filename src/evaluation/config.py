@@ -30,10 +30,9 @@ OPTIMIZER_MAX_ITERATIONS_OVERALL = 10 # Max iterations for the optimizer (e.g. h
 SKIP_IMAGES_WITHOUT_GT = True
 VIDEO_FPS = 20.0
 AUTO_PLAY_VIDEO_ON_COMPLETION = True # Added new flag
-START_IMAGE_INDEX = 925  # 0-based index of the first image to process
-PROCESS_NUM_IMAGES = 70 # Number of images to process from START_IMAGE_INDEX. None or 0 means use MAX_IMAGES_TO_PROCESS or all.
+START_IMAGE_INDEX = 425  # 0-based index of the first image to process
+PROCESS_NUM_IMAGES = 51 # Number of images to process from START_IMAGE_INDEX. None or 0 means use MAX_IMAGES_TO_PROCESS or all.
 RESIZE_PROCESSING_FACTOR = 0.5 # Verarbeitet Bilder mit 50% ihrer Originalgröße
-
 
 # --- Algorithm Configuration ---
 # Define which algorithms to run and their properties

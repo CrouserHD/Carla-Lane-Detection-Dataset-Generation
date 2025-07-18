@@ -4,7 +4,7 @@ import config as cfg
 import pandas as pd
 
 # Pfade anpassen:
-loading_directory = os.path.join('data', 'debug', cfg.CARLA_TOWN)
+loading_directory = os.path.join('data', 'dataset', cfg.CARLA_TOWN)
 metadata_path    = os.path.join('data', 'rawimages', cfg.CARLA_TOWN, 'metadata.csv')
 output_video     = os.path.join('data', f"{cfg.CARLA_TOWN}.mp4")
 

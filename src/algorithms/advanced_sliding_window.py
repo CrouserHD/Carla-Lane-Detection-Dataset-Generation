@@ -192,34 +192,26 @@ class AdvancedLaneDetectorInternal:
 
 _adv_detector_instance = None
 
-def detect_lanes_advanced_sliding_window(image, roi_vertices, algo_specific_params, common_config):
+def detect_lanes_advanced_sliding_window(image, roi_vertices, config):
     """
     Detects lanes using an advanced sliding window algorithm.
     Args:
         image: Input BGR image (NumPy array).
         roi_vertices: A NumPy array defining the region of interest (currently not directly used by this algo).
-        algo_specific_params: Dictionary of parameters specific to this algorithm (not used).
-        common_config: The configuration module (lane_comparison_config).
+        config: The main configuration module.
     Returns:
         A list of detected lanes. Each lane is a list of [x, y] points in original image coordinates.
         e.g., [ [[x1l,y1l], [x2l,y2l], ...], [[x1r,y1r], [x2r,y2r], ...] ]
     """
     global _adv_detector_instance
     if _adv_detector_instance is None:
-        _adv_detector_instance = AdvancedLaneDetectorInternal(common_config)
+        # Pass the main config module to the internal detector class
+        _adv_detector_instance = AdvancedLaneDetectorInternal(config)
     
-    # Update config reference if it changed (e.g. if common_config is a reloaded module)
-    # This is more robust if the common_config object identity can change.
-    if _adv_detector_instance.config is not common_config:
-         _adv_detector_instance.config = common_config
-         # Potentially re-initialize parts of the detector that depend on config values
-         # if they are not dynamically read (like nwindows, margin etc. are on init)
-         # For now, assuming config values used at __init__ are sufficient or
-         # critical ones like thresholds are reread or passed appropriately.
-         # The current AdvancedLaneDetectorInternal reads most params at __init__.
-         # A full re-init might be safer if config changes are expected during a session:
-         # _adv_detector_instance = AdvancedLaneDetectorInternal(common_config)
-
+    # If the config object identity could change (e.g., reloaded modules),
+    # it's safer to update the detector's config reference.
+    if _adv_detector_instance.config is not config:
+         _adv_detector_instance = AdvancedLaneDetectorInternal(config)
 
     return _adv_detector_instance.get_lane_lines_from_image(image)
 

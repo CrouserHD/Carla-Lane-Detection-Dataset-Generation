@@ -2,11 +2,12 @@ import logging  # Add logging
 import cv2
 import numpy as np
 import os
-from . import utils
-from . import lane_comparison_config as CFG
+from . import metrics as utils
+import config as cfg  # HINZUFÜGEN: Import der Konfigurationsdatei
+
 
 # Configure a simple logger for this module
-logger = logging.getLogger(__name__)  # Gets a logger named: src.lane_comparison.visualizer
+logger = logging.getLogger(__name__)  # Gets a logger named: src.evaluation.visualizer
 #turn off logger
 logger.disabled = True
 # Check if handlers are already attached to prevent duplicate logs
@@ -76,8 +77,8 @@ def create_comparison_image(original_image_cv2, detected_lanes_by_algo, gt_lanes
             overlay_image = utils.draw_single_lane_set(
                 overlay_image, 
                 gt_lanes_for_image, 
-                CFG.GT_COLOR, 
-                CFG.GT_THICKNESS
+                cfg.GT_COLOR, 
+                cfg.GT_THICKNESS
             )
             logger.debug(f"Visualizer ({image_filename_for_log}): GT lanes drawing attempted.")
         except Exception as e:
@@ -91,7 +92,7 @@ def create_comparison_image(original_image_cv2, detected_lanes_by_algo, gt_lanes
         if algo_result and isinstance(algo_result, dict):
             algo_display_name = algo_result.get('name')
             algo_lanes = algo_result.get('lanes')
-            algo_color = algo_result.get('color', CFG.DEFAULT_ALGO_COLOR) # Use default if color not in result
+            algo_color = algo_result.get('color', cfg.DEFAULT_ALGO_COLOR) # Use default if color not in result
 
             if algo_display_name:
                 logger.info(f"Visualizer ({image_filename_for_log}): Processing detected lanes for {algo_display_name}.")
@@ -113,7 +114,7 @@ def create_comparison_image(original_image_cv2, detected_lanes_by_algo, gt_lanes
                             overlay_image,
                             algo_lanes,
                             algo_color, # Use color from algo_result
-                            CFG.ALGO_LANE_THICKNESS
+                            cfg.ALGO_LANE_THICKNESS
                         )
                         logger.debug(f"Visualizer ({image_filename_for_log}): {algo_display_name} lanes drawing attempted.")
                     except Exception as e:

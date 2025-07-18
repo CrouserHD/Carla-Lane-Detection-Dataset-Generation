@@ -361,14 +361,21 @@ def define_roi_vertices_from_config(image_shape, cfg_module):
         A NumPy array of shape (1, 4, 2) defining the ROI vertices.
     """
     height, width = image_shape[:2]
-    roi_tl_x = int(width * cfg_module.ROI_X_START_RATIO)
-    roi_tl_y = int(height * cfg_module.ROI_Y_RATIO)
-    roi_tr_x = int(width * cfg_module.ROI_X_END_RATIO)
-    roi_tr_y = int(height * cfg_module.ROI_Y_RATIO)
-    roi_bl_x = int(width * (cfg_module.ROI_X_START_RATIO - cfg_module.ROI_BOTTOM_WIDTH_FACTOR_OFFSET))
-    roi_bl_y = int(height * cfg_module.ROI_Y_END_RATIO)
-    roi_br_x = int(width * (cfg_module.ROI_X_END_RATIO + cfg_module.ROI_BOTTOM_WIDTH_FACTOR_OFFSET))
-    roi_br_y = int(height * cfg_module.ROI_Y_END_RATIO)
+    # fetch ratios from SETTINGS with fallbacks
+    xr_start = cfg_module.get_config('SETTINGS', 'ROI_X_START_RATIO') or cfg_module.ROI_X_START_RATIO
+    yr = cfg_module.get_config('SETTINGS', 'ROI_Y_RATIO') or cfg_module.ROI_Y_RATIO
+    xr_end = cfg_module.get_config('SETTINGS', 'ROI_X_END_RATIO') or cfg_module.ROI_X_END_RATIO
+    yr_end = cfg_module.get_config('SETTINGS', 'ROI_Y_END_RATIO') or cfg_module.ROI_Y_END_RATIO
+    bottom_offset = cfg_module.get_config('SETTINGS', 'ROI_BOTTOM_WIDTH_FACTOR_OFFSET') or cfg_module.ROI_BOTTOM_WIDTH_FACTOR_OFFSET
+    # compute vertices
+    roi_tl_x = int(width * xr_start)
+    roi_tl_y = int(height * yr)
+    roi_tr_x = int(width * xr_end)
+    roi_tr_y = int(height * yr)
+    roi_bl_x = int(width * (xr_start - bottom_offset))
+    roi_bl_y = int(height * yr_end)
+    roi_br_x = int(width * (xr_end + bottom_offset))
+    roi_br_y = int(height * yr_end)
     
     roi_bl_x = max(0, roi_bl_x)
     roi_br_x = min(width, roi_br_x)

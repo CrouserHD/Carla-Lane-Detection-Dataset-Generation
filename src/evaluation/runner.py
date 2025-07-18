@@ -1,34 +1,30 @@
 #print("DEBUG: run_comparison.py script started") # DEBUG PRINT 0
 
 import cv2
+import config as cfg
 import os
 import json
 import numpy as np
 import importlib
-import types
 from types import SimpleNamespace
 import copy
 import multiprocessing
 import logging
 import time
 import random # Added for sampling images for optimization
-from . import utils as lane_utils # Changed alias for clarity
-from . import lane_comparison_config as cfg # For main orchestrator
-from .utils import (
+import matplotlib.pyplot as plt
+from . import metrics as lane_utils # Changed alias for clarity
+from .metrics import (
     load_ground_truth_entry, 
     convert_culane_gt_to_points, 
     calculate_lane_metrics, 
     parse_command_line_arguments, 
     define_roi_vertices_from_config,
-    save_and_print_metrics_summary
+    save_and_print_metrics_summary,
+    print_metrics_table_to_console
 )
 from .visualizer import create_comparison_image, save_image
-from .parameter_sweeper import (
-    generate_hough_transform_parameter_sets,
-    generate_advanced_sliding_window_parameter_sets,
-    generate_carnd_pipeline_parameter_sets, 
-    expand_algorithms_for_sweeps,
-    DEFAULT_VARIANT_COLORS,
+from .optimizer import (
     optimize_parameters_for_algorithm # Import the optimizer function
 )
 
@@ -46,6 +42,15 @@ def _mp_worker_process_single_algo_all_images(
     image_filenames_worker,
     global_cfg_dict_serializable_worker # Contains picklable config values
 ):
+    # --- Path Correction for Worker Process ---
+    # Add project root to path to ensure 'src' can be found for module imports
+    import sys
+    # This ensures that the 'src' module can be found by the worker process
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    # --- End Path Correction ---
+
     # Initialize logger for this specific worker process
     # Using a distinct logger name can help differentiate logs if needed.
     worker_logger = logging.getLogger(f"{__name__}.mp_worker.{algo_config_worker['display_name']}")
@@ -83,13 +88,13 @@ def _mp_worker_process_single_algo_all_images(
     current_run_cfg_worker = SimpleNamespace(**current_run_cfg_dict_worker_base)
 
     # Dynamically import the algorithm module and function
-    module_path = f".algorithms.{algo_config_worker['module_name']}"
+    module_path = f"src.algorithms.{algo_config_worker['module_name']}"
     try:
-        # Assuming this script (run_comparison.py) is part of the 'src.lane_comparison' package
-        algo_module = importlib.import_module(module_path, package='src.lane_comparison')
+        # Assuming this script (run_comparison.py) is part of the 'src.evaluation' package
+        algo_module = importlib.import_module(module_path)
         detect_function = getattr(algo_module, algo_config_worker['function_name'])
     except Exception as e:
-        #worker_logger.error(f"Error loading algorithm {algo_name_worker}: {e}")
+        worker_logger.error(f"Error loading algorithm {algo_name_worker}: {e}")
         # Return empty results if algorithm loading fails
         return algo_name_worker, [], {}, 0, 0
 
@@ -195,7 +200,7 @@ def _mp_worker_process_single_algo_all_images(
                         worker_logger.debug(f"[{algo_name_worker}] Non-point data found in lane for scaling: {point}")
                 scaled_back_lanes.append(scaled_lane)
             detected_lanes_worker = scaled_back_lanes
-            worker_logger.debug(f"[{algo_name_worker}] Scaled back detected lanes for {image_filename_worker}") # Corrected variable name
+            worker_logger.debug(f"[{algo_name_worker}] Scaled back detected lanes for {image_filename_worker}")
 
         metrics_worker = {}
         # Use SKIP_IMAGES_WITHOUT_GT from the effective config for this run
@@ -472,11 +477,18 @@ def _evaluation_callback_for_optimizer(
     Callback function for the optimizer to evaluate a given set of parameters.
     It runs the detection algorithm on a subset of images and returns an F1 score.
     """
+    # --- Path Correction for Optimizer Callback ---
+    import sys
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    # --- End Path Correction ---
+
     logger_callback.debug(f"Optimizer eval callback: Algo: {algo_module_name}, Params: {current_params_for_eval}, Images: {len(image_path_subset)}")
 
     try:
-        # Assuming src.lane_detection_algorithms is the correct path relative to where the script is run or Python's path
-        algo_module = importlib.import_module(f"src.lane_detection_algorithms.{algo_module_name}")
+        # Assuming src.algorithms is the correct path relative to where the script is run or Python's path
+        algo_module = importlib.import_module(f"src.algorithms.{algo_module_name}")
         detection_function = getattr(algo_module, algo_fn_name)
     except Exception as e:
         logger_callback.error(f"Optimizer eval: Failed to load algorithm {algo_module_name}.{algo_fn_name}: {e}")
@@ -508,7 +520,6 @@ def _evaluation_callback_for_optimizer(
             current_full_config_for_eval = {
                 "IMAGE_WIDTH": img_for_eval.shape[1],
                 "IMAGE_HEIGHT": img_for_eval.shape[0],
-                "ROI_VERTICES_RATIO": cfg_callback.ROI_VERTICES_RATIO, # from main cfg
                 # Add other general config items if needed by the algo, e.g., H_SAMPLES if not passed elsewhere
             }
             # Merge the tuned algorithm-specific parameters into this full config
@@ -516,7 +527,7 @@ def _evaluation_callback_for_optimizer(
 
 
             processed_result = None
-            if "carnd_algorithm" in algo_module_name or "hough_transform_algorithm" in algo_module_name:
+            if "carnd_algorithm" in algo_module_name or "hough_transform" in algo_module_name:
                  processed_result = detection_function(
                     img_for_eval,
                     config=current_full_config_for_eval, # Pass the combined and tuned config
@@ -583,261 +594,262 @@ def _evaluation_callback_for_optimizer(
     return average_f1
 
 
-def main_comparison_orchestrator():
-    #print("DEBUG: main_comparison_orchestrator() called") # DEBUG PRINT 4
-    args = parse_command_line_arguments(cfg) # parse_command_line_arguments is from .utils
-    #print(f"DEBUG: Parsed command line arguments: {args}") # DEBUG PRINT 4.1
+def plot_optimization_histories(histories, output_dir, logger_instance):
+    """
+    Plots the F1 score history for each algorithm from the optimization phase.
+    """
+    logger_instance.info("--- Plotting Optimization Histories ---")
+    if not histories:
+        logger_instance.info("No optimization histories to plot.")
+        return
 
-    # --- Configuration & Setup ---
-    PERFORM_OPTIMIZATION = getattr(cfg, "PERFORM_OPTIMIZATION_PHASE", True) # Control optimization phase
+    for algo_name, history in histories.items():
+        if not history:
+            logger_instance.warning(f"No history data for {algo_name} to plot.")
+            continue
 
-    # Determine active algorithms from the main config (cfg.ALGORITHMS_TO_RUN)
-    # These are the base definitions before any sweep or optimization.
-    # The structure in cfg.ALGORITHMS_TO_RUN is a list of dicts.
-    # We need to transform this into a dictionary keyed by a unique name for easier lookup,
-    # if cfg.ALGORITHMS is intended to be such a dictionary.
-    # For now, assume cfg.ALGORITHMS is already the desired dict format.
-    # If not, it needs to be constructed from cfg.ALGORITHMS_TO_RUN.
-    # Let's assume cfg.ALGORITHMS is the primary source for algorithm definitions for optimization.
-
-    # Initialize ground_truth_data
-    ground_truth_data = {}
-    if os.path.exists(cfg.JSON_GT_PATH):
         try:
-            with open(cfg.JSON_GT_PATH, 'r') as f:
-                logger.info(f"Attempting to load ground truth data from: {cfg.JSON_GT_PATH}")
-                lines_read = 0
-                entries_added = 0
-                for line_number, line in enumerate(f):
-                    lines_read += 1
-                    line = line.strip()
-                    if not line: continue
-                    try:
-                        gt_entry = json.loads(line)
-                        raw_file_path = gt_entry.get("raw_file")
-                        if raw_file_path:
-                            image_filename = os.path.basename(raw_file_path)
-                            gt_lanes_data = gt_entry.get("lanes")
-                            gt_h_samples_data = gt_entry.get("h_samples")
-                            if gt_lanes_data is not None and gt_h_samples_data is not None:
-                                ground_truth_data[image_filename] = {
-                                    "lanes": gt_lanes_data,
-                                    "h_samples": gt_h_samples_data
-                                }
-                                entries_added += 1
-                            else:
-                                logger.warning(f"GT entry for '{image_filename}' (from '{raw_file_path}') on line {line_number + 1} missing 'lanes' or 'h_samples'.")
-                        else:
-                            logger.warning(f"GT entry in {cfg.JSON_GT_PATH} on line {line_number + 1} missing 'raw_file' key.")
-                    except json.JSONDecodeError as e_line:
-                        logger.error(f"Error decoding JSON line from {cfg.JSON_GT_PATH} on line {line_number + 1}: {e_line}.")
-                    except Exception as e_entry:
-                         logger.error(f"Unexpected error processing GT entry on line {line_number + 1}: {e_entry}.")
-                logger.info(f"GT Load: Read {lines_read} lines. Successfully processed {entries_added} entries.")
-            if not ground_truth_data:
-                logger.warning(f"Ground truth file {cfg.JSON_GT_PATH} was read, but no valid entries were processed.")
-        except Exception as e_file:
-            logger.error(f"Failed to read/process ground truth file {cfg.JSON_GT_PATH}: {e_file}.")
-    else:
-        logger.warning(f"Ground truth file not found: {cfg.JSON_GT_PATH}.")
+            plt.figure(figsize=(10, 6))
+            plt.plot(history, marker='o', linestyle='-', label=f'F1 Score per Iteration')
+            plt.title(f'Optimization F1 Score History for {algo_name}')
+            plt.xlabel('Evaluation Iteration')
+            plt.ylabel('Average F1 Score')
+            plt.grid(True)
+            plt.legend()
+            
+            # Find best score and mark it
+            if history:
+                best_score = max(history)
+                best_iter = history.index(best_score)
+                plt.scatter(best_iter, best_score, color='red', zorder=5, label=f'Best F1: {best_score:.4f}')
+                plt.legend()
 
-    # --- Image List Preparation ---
-    start_index = args.start_index
-    num_to_process_from_arg = args.num_images
+            plot_filename = f"optimization_history_{algo_name.replace(' ', '_')}.png"
+            plot_filepath = os.path.join(output_dir, plot_filename)
+            
+            plt.savefig(plot_filepath)
+            plt.close() # Close the figure to free memory
+            logger_instance.info(f"Saved optimization plot for {algo_name} to {plot_filepath}")
 
-    if not os.path.exists(cfg.OUTPUT_VIS_DIR):
-        os.makedirs(cfg.OUTPUT_VIS_DIR, exist_ok=True)
+        except Exception as e:
+            logger_instance.error(f"Failed to plot optimization history for {algo_name}: {e}", exc_info=True)
+
+
+def _load_ground_truth(gt_path, logger_instance):
+    """Loads ground truth data from the specified JSON file."""
+    ground_truth_data = {}
+    if not os.path.exists(gt_path):
+        logger_instance.warning(f"Ground truth file not found: {gt_path}.")
+        return ground_truth_data
 
     try:
-        logger.info(f"Attempting to list files from IMAGE_SOURCE_DIR: {cfg.IMAGE_SOURCE_DIR}")
-        available_image_files = [f for f in os.listdir(cfg.IMAGE_SOURCE_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        available_image_files.sort()
-        logger.info(f"Found {len(available_image_files)} image files.")
+        with open(gt_path, 'r') as f:
+            logger_instance.info(f"Attempting to load ground truth data from: {gt_path}")
+            lines_read, entries_added = 0, 0
+            for line_number, line in enumerate(f):
+                lines_read += 1
+                line = line.strip()
+                if not line: continue
+                try:
+                    gt_entry = json.loads(line)
+                    raw_file_path = gt_entry.get("raw_file")
+                    if raw_file_path:
+                        image_filename = os.path.basename(raw_file_path)
+                        gt_lanes_data = gt_entry.get("lanes")
+                        gt_h_samples_data = gt_entry.get("h_samples")
+                        if gt_lanes_data is not None and gt_h_samples_data is not None:
+                            ground_truth_data[image_filename] = {
+                                "lanes": gt_lanes_data, "h_samples": gt_h_samples_data
+                            }
+                            entries_added += 1
+                        else:
+                            logger_instance.warning(f"GT entry for '{image_filename}' on line {line_number + 1} missing 'lanes' or 'h_samples'.")
+                    else:
+                        logger_instance.warning(f"GT entry in {gt_path} on line {line_number + 1} missing 'raw_file' key.")
+                except json.JSONDecodeError as e_line:
+                    logger_instance.error(f"Error decoding JSON line from {gt_path} on line {line_number + 1}: {e_line}.")
+                except Exception as e_entry:
+                    logger_instance.error(f"Unexpected error processing GT entry on line {line_number + 1}: {e_entry}.")
+            logger_instance.info(f"GT Load: Read {lines_read} lines. Successfully processed {entries_added} entries.")
+        if not ground_truth_data:
+            logger_instance.warning(f"Ground truth file {gt_path} was read, but no valid entries were processed.")
+    except Exception as e_file:
+        logger_instance.error(f"Failed to read/process ground truth file {gt_path}: {e_file}.")
+    
+    return ground_truth_data
+
+
+def _prepare_image_list(source_dir, args, logger_instance):
+    """Prepares the list of image files to process based on source directory and arguments."""
+    try:
+        logger_instance.info(f"Attempting to list files from IMAGE_SOURCE_DIR: {source_dir}")
+        available_image_files = sorted([f for f in os.listdir(source_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
+        logger_instance.info(f"Found {len(available_image_files)} image files.")
     except FileNotFoundError:
-        logger.error(f"Image directory not found: {cfg.IMAGE_SOURCE_DIR}"); return
+        logger_instance.error(f"Image directory not found: {source_dir}")
+        return None, None
+    
     if not available_image_files:
-        logger.warning(f"No images found in {cfg.IMAGE_SOURCE_DIR}."); return
+        logger_instance.warning(f"No images found in {source_dir}.")
+        return [], []
 
-    if start_index < 0: start_index = 0
+    start_index = max(0, args.start_index)
     if start_index >= len(available_image_files):
-        logger.error(f"start_index ({start_index}) out of bounds."); return
+        logger_instance.error(f"start_index ({start_index}) out of bounds.")
+        return None, None
 
-    images_to_consider_all = available_image_files[start_index:]
-    num_actually_to_process = len(images_to_consider_all)
-    if num_to_process_from_arg is not None and num_to_process_from_arg > 0:
-        num_actually_to_process = min(len(images_to_consider_all), num_to_process_from_arg)
+    images_to_consider = available_image_files[start_index:]
+    num_to_process = len(images_to_consider)
+    if args.num_images is not None and args.num_images > 0:
+        num_to_process = min(len(images_to_consider), args.num_images)
     
-    if num_actually_to_process == 0:
-        logger.warning("No images to process after applying start_index and num_images."); return
+    if num_to_process == 0:
+        logger_instance.warning("No images to process after applying start_index and num_images.")
+        return [], available_image_files
         
-    image_list_for_main_run = images_to_consider_all[:num_actually_to_process]
-    logger.info(f"Main run will process {len(image_list_for_main_run)} images, starting with {image_list_for_main_run[0] if image_list_for_main_run else 'N/A'}.")
+    image_list_for_run = images_to_consider[:num_to_process]
+    logger_instance.info(f"Main run will process {len(image_list_for_run)} images, starting with {image_list_for_run[0] if image_list_for_run else 'N/A'}.")
+    return image_list_for_run, available_image_files
 
-    # --- Parameter Optimization Phase ---
-    optimized_algo_params = {} # Store optimized params here, keyed by algo_name from cfg.ALGORITHMS
 
-    if PERFORM_OPTIMIZATION:
-        logger.info("--- Starting Parameter Optimization Phase ---")
-        num_images_for_opt_phase = min(len(available_image_files), getattr(cfg, "NUM_IMAGES_FOR_OPTIMIZATION_PHASE", 50))
-        
-        image_paths_for_optimization = []
-        if num_images_for_opt_phase > 0 and available_image_files:
-             # Sample from all available images, not just the main run list, to get diverse data
-            image_paths_for_optimization = random.sample(
-                [os.path.join(cfg.IMAGE_SOURCE_DIR, f) for f in available_image_files], 
-                min(num_images_for_opt_phase, len(available_image_files)) # Ensure sample size doesn't exceed available images
+def _run_optimization_phase(cfg_module, all_images, gt_data, logger_instance):
+    """Runs the parameter optimization phase for configured algorithms."""
+    logger_instance.info("--- Starting Parameter Optimization Phase ---")
+    optimized_params = {}
+    histories = {}
+
+    num_images_for_opt = min(len(all_images), getattr(cfg_module, "NUM_IMAGES_FOR_OPTIMIZATION_PHASE", 50))
+    if num_images_for_opt <= 0 or not all_images:
+        logger_instance.warning("Not enough images or NUM_IMAGES_FOR_OPTIMIZATION_PHASE is 0. Skipping optimization.")
+        return {}, {}
+
+    if not gt_data:
+        logger_instance.warning("No ground truth data loaded. Parameter optimization requires GT and will be skipped.")
+        return {}, {}
+
+    if not hasattr(cfg_module, 'ALGORITHMS') or not isinstance(cfg_module.ALGORITHMS, dict):
+        logger_instance.error("cfg.ALGORITHMS not defined or not a dictionary. Cannot perform optimization.")
+        return {}, {}
+
+    image_paths_for_opt = random.sample(
+        [os.path.join(cfg_module.IMAGE_SOURCE_DIR, f) for f in all_images],
+        min(num_images_for_opt, len(all_images))
+    )
+    logger_instance.info(f"Selected {len(image_paths_for_opt)} images randomly for optimization.")
+
+    for algo_key, algo_cfg in cfg_module.ALGORITHMS.items():
+        default_params = algo_cfg.get("parameters", {}).copy()
+        opt_settings = cfg_module.OPTIMIZATION_SETTINGS.get(algo_key)
+
+        if not (opt_settings and opt_settings.get("enabled") and opt_settings.get("parameters_to_tune")):
+            logger_instance.info(f"Optimization not enabled for {algo_key}. Using default parameters.")
+            optimized_params[algo_key] = default_params
+            continue
+
+        logger_instance.info(f"Starting parameter optimization for {algo_key}...")
+        algo_module_name = algo_cfg.get("module")
+        algo_fn_name = algo_cfg.get("function")
+
+        if not algo_module_name or not algo_fn_name:
+            logger_instance.error(f"Algorithm {algo_key} is missing 'module' or 'function'. Skipping optimization.")
+            optimized_params[algo_key] = default_params
+            continue
+
+        try:
+            best_params, best_score, score_history = optimize_parameters_for_algorithm(
+                algorithm_name_passed_in=algo_key,
+                base_algo_config=algo_cfg,
+                algo_module_name=algo_module_name,
+                algo_fn_name=algo_fn_name,
+                parameters_to_tune_config=opt_settings["parameters_to_tune"],
+                image_path_subset=image_paths_for_opt,
+                evaluation_callback=_evaluation_callback_for_optimizer,
+                logger_instance=logger_instance,
+                cfg_module=cfg_module,
+                eval_callback_additional_args=(gt_data, cfg_module.H_SAMPLES)
             )
-            logger.info(f"Selected {len(image_paths_for_optimization)} images randomly for the optimization phase.")
-        else:
-            logger.warning("Not enough images available or NUM_IMAGES_FOR_OPTIMIZATION_PHASE is 0. Skipping optimization phase.")
-            PERFORM_OPTIMIZATION = False # Disable optimization if no images
+            logger_instance.info(f"Optimization for {algo_key} complete. Best F1: {best_score:.4f}. Params: {best_params}")
+            optimized_params[algo_key] = best_params
+            histories[algo_key] = score_history
+        except Exception as e_opt:
+            logger_instance.error(f"Error during optimization for {algo_key}: {e_opt}", exc_info=True)
+            optimized_params[algo_key] = default_params
 
-        if PERFORM_OPTIMIZATION and not ground_truth_data:
-            logger.warning("No ground truth data loaded. Parameter optimization requires GT and will be skipped.")
-            PERFORM_OPTIMIZATION = False
+    return optimized_params, histories
 
-        if PERFORM_OPTIMIZATION:
-            # Iterate through algorithms defined in cfg.ALGORITHMS (assuming this is the dict structure)
-            # Example: cfg.ALGORITHMS = {"carnd_algorithm": {"module": ..., "function": ..., "parameters": {...}}, ...}
-            # This needs to be aligned with how ALGORITHMS_TO_RUN is structured and used later.
-            # For now, let's assume cfg.ALGORITHMS exists and is the master list for optimization.
-            
-            # Check if cfg.ALGORITHMS exists and is a dictionary
-            if not hasattr(cfg, 'ALGORITHMS') or not isinstance(cfg.ALGORITHMS, dict):
-                logger.error("cfg.ALGORITHMS is not defined or not a dictionary. Cannot perform optimization. Please define it in lane_comparison_config.py")
-                PERFORM_OPTIMIZATION = False
 
-            if PERFORM_OPTIMIZATION:
-                for algo_name_key, algo_config_entry in cfg.ALGORITHMS.items():
-                    if algo_name_key == "lanenet_algorithm": # Skip LaneNet
-                        logger.info(f"Skipping parameter optimization for {algo_name_key} (LaneNet).")
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy()
-                        continue
-
-                    opt_settings_for_algo = cfg.OPTIMIZATION_SETTINGS.get(algo_name_key)
-                    
-                    # Corrected multi-line if condition
-                    skip_optimization_for_this_algo = False
-                    if not opt_settings_for_algo:
-                        skip_optimization_for_this_algo = True
-                    elif not opt_settings_for_algo.get("enabled", False): # Check "enabled" key
-                        skip_optimization_for_this_algo = True
-                    elif not opt_settings_for_algo.get("parameters_to_tune"): # Check "parameters_to_tune" key
-                        skip_optimization_for_this_algo = True
-
-                    if skip_optimization_for_this_algo:
-                        logger.info(f"Optimization not enabled or no parameters to tune for {algo_name_key}. Using default parameters.")
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy()
-                        continue
-                    
-                    logger.info(f"Starting parameter optimization for {algo_name_key}...")
-                    
-                    # algo_config_entry is the base config for this algorithm from cfg.ALGORITHMS
-                    # It should contain 'module', 'function', and 'parameters' (initial defaults)
-                    algo_module_name = algo_config_entry.get("module")
-                    algo_fn_name = algo_config_entry.get("function")
-
-                    if not algo_module_name or not algo_fn_name:
-                        logger.error(f"Algorithm {algo_name_key} in cfg.ALGORITHMS is missing 'module' or 'function' definition. Skipping optimization.")
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy()
-                        continue
-
-                    try:
-                        best_params, best_score = optimize_parameters_for_algorithm(
-                            algorithm_name_passed_in=algo_name_key,
-                            base_algo_config=algo_config_entry, 
-                            algo_module_name=algo_module_name,
-                            algo_fn_name=algo_fn_name,
-                            parameters_to_tune_config=opt_settings_for_algo["parameters_to_tune"],
-                            image_path_subset=image_paths_for_optimization,
-                            evaluation_callback=_evaluation_callback_for_optimizer,
-                            logger_instance=logger,
-                            cfg_module=cfg,
-                            # Additional args for _evaluation_callback_for_optimizer:
-                            eval_callback_additional_args=(ground_truth_data, cfg.H_SAMPLES) 
-                        )
-                        logger.info(f"Optimization for {algo_name_key} complete. Best F1: {best_score:.4f}. Optimized Params: {best_params}")
-                        optimized_algo_params[algo_name_key] = best_params
-                    except Exception as e_opt:
-                        logger.error(f"Error during optimization for {algo_name_key}: {e_opt}", exc_info=True)
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy() # Fallback to defaults
-
-    # --- Prepare Algorithm Configurations for Main Run ---
-    # Start with ALGORITHMS_TO_RUN from config, which defines which ones are active for the main comparison
-    
-    final_algorithms_for_main_run = []
-    for algo_run_config in cfg.ALGORITHMS_TO_RUN: # This is a list of dicts
+def _prepare_main_run_configs(cfg_module, optimized_algo_params, perform_optimization):
+    """Prepares the final list of algorithm configurations for the main run."""
+    final_algorithms = []
+    for algo_run_config in cfg_module.ALGORITHMS_TO_RUN:
         if not algo_run_config.get("active", False):
             continue
 
-        algo_name_for_run = algo_run_config.get("display_name") # Or derive a key if display_name isn't unique/stable
-        if not algo_name_for_run:
-            logger.warning(f"Algorithm config in ALGORITHMS_TO_RUN is missing 'display_name'. Skipping: {algo_run_config}")
+        display_name = algo_run_config.get("display_name")
+        if not display_name:
+            logger.warning(f"Algorithm config in ALGORITHMS_TO_RUN missing 'display_name'. Skipping.")
             continue
             
-        # Create a mutable copy for this run
-        current_algo_run_config = copy.deepcopy(algo_run_config)
-
-        # If optimization was performed and parameters were found for this algorithm, apply them.
-        # The key used for optimized_algo_params should match how we identify algorithms from cfg.ALGORITHMS.
-        # Let's assume the 'display_name' from ALGORITHMS_TO_RUN can map to the keys in cfg.ALGORITHMS and OPTIMIZATION_SETTINGS.
-        # This requires careful naming consistency. A safer way is to use a unique internal name.
-        # For now, let's try matching based on 'module_name' as it's more likely to be a unique key.
+        current_config = copy.deepcopy(algo_run_config)
         
-        # Find the corresponding entry in cfg.ALGORITHMS to get the key used in optimization
         optimization_key = None
-        if hasattr(cfg, 'ALGORITHMS') and isinstance(cfg.ALGORITHMS, dict):
-            for opt_key, opt_cfg_val in cfg.ALGORITHMS.items():
-                # Corrected multi-line if condition
-                if opt_cfg_val.get("module") == current_algo_run_config.get("module_name") and \
-                   opt_cfg_val.get("function") == current_algo_run_config.get("function_name"):
+        if hasattr(cfg_module, 'ALGORITHMS') and isinstance(cfg_module.ALGORITHMS, dict):
+            for opt_key, opt_cfg in cfg_module.ALGORITHMS.items():
+                if opt_cfg.get("module") == current_config.get("module_name") and \
+                   opt_cfg.get("function") == current_config.get("function_name"):
                     optimization_key = opt_key
                     break
         
         if optimization_key and optimization_key in optimized_algo_params:
-            logger.info(f"Applying optimized parameters to {algo_name_for_run} (key: {optimization_key}) for the main run.")
-            # The 'param_overrides' key is used by the worker to apply these.
-            # Ensure this doesn't conflict with how 'parameters' in cfg.ALGORITHMS is structured.
-            # The worker expects 'param_overrides' to be flat key-value pairs.
-            # The optimized_algo_params should be in this flat format.
-            current_algo_run_config["param_overrides"] = optimized_algo_params[optimization_key]
-        elif PERFORM_OPTIMIZATION: # Optimization was on, but no params for this specific algo (e.g. skipped, error)
-             logger.info(f"No optimized parameters found or applied for {algo_name_for_run} (opt key: {optimization_key}). Using defaults from ALGORITHMS_TO_RUN or base config.")
-             # Ensure it uses its original default parameters if any are defined in ALGORITHMS_TO_RUN itself
-             if "params" in current_algo_run_config: # e.g. LaneNet
-                 current_algo_run_config["param_overrides"] = current_algo_run_config["params"]
+            logger.info(f"Applying optimized parameters to {display_name} (key: {optimization_key}).")
+            current_config["param_overrides"] = optimized_algo_params[optimization_key]
+        elif perform_optimization:
+             logger.info(f"No optimized parameters found for {display_name}. Using defaults.")
+             if "params" in current_config:
+                 current_config["param_overrides"] = current_config["params"]
+
+        final_algorithms.append(current_config)
+    
+    return final_algorithms
 
 
-        # Parameter sweep expansion (currently disabled by PERFORM_HOUGH_TRANSFORM etc. flags at top)
-        # This part would need to be integrated carefully if sweeps and optimization are both active.
-        # For now, assuming sweeps are off if optimization is on, or they are mutually exclusive.
-        # The expand_algorithms_for_sweeps function might need to be adapted if optimized params are the new base.
-        
-        # For simplicity, if optimization is on, we assume no sweeps.
-        # If optimization is off, the original sweep logic could apply.
-        # The current structure of expand_algorithms_for_sweeps takes active_algorithms_from_config.
-        # We are building final_algorithms_for_main_run here.
-        
-        # If not doing sweeps (as PERFORM_... flags are False), just add the (potentially optimized) algo config.
-        final_algorithms_for_main_run.append(current_algo_run_config)
+def main():
+    args = parse_command_line_arguments(cfg)
 
+    # --- Configuration & Setup ---
+    PERFORM_OPTIMIZATION = getattr(cfg, "PERFORM_OPTIMIZATION_PHASE", True)
+    if not os.path.exists(cfg.OUTPUT_VIS_DIR):
+        os.makedirs(cfg.OUTPUT_VIS_DIR, exist_ok=True)
 
-    # If parameter sweeps were to be performed (and PERFORM_... flags were True),
-    # the logic for expand_algorithms_for_sweeps would be here,
-    # potentially taking the `final_algorithms_for_main_run` (with optimized params) as a base.
-    # For now, the original sweep flags (PERFORM_HOUGH_TRANSFORM etc.) are hardcoded to False.
-    # If they were True, this would be more complex.
-    # Let's assume if PERFORM_OPTIMIZATION is True, those sweep flags are effectively False for this path.
+    # --- Data and Image List Preparation ---
+    ground_truth_data = _load_ground_truth(cfg.JSON_GT_PATH, logger)
+    image_list_for_main_run, available_image_files = _prepare_image_list(cfg.IMAGE_SOURCE_DIR, args, logger)
+
+    if image_list_for_main_run is None: # Indicates a fatal error like directory not found
+        return {}, 0
+    if not image_list_for_main_run: # No images to process
+        logger.warning("No images selected for the main run. Exiting.")
+        return {}, 0
+
+    # --- Parameter Optimization Phase ---
+    optimized_algo_params = {}
+    if PERFORM_OPTIMIZATION:
+        optimized_algo_params, optimization_histories = _run_optimization_phase(cfg, available_image_files, ground_truth_data, logger)
+        if optimization_histories:
+            plot_optimization_histories(optimization_histories, cfg.OUTPUT_VIS_DIR, logger)
+    
+    # --- Prepare Algorithm Configurations for Main Run ---
+    final_algorithms_for_main_run = _prepare_main_run_configs(cfg, optimized_algo_params, PERFORM_OPTIMIZATION)
 
     if not final_algorithms_for_main_run:
-        logger.warning("No algorithms are configured to run after optimization/preparation. Exiting.")
-        return
+        logger.warning("No algorithms are configured to run. Exiting.")
+        return {}, 0
 
     logger.info(f"--- Starting Main Comparison Run with {len(final_algorithms_for_main_run)} algorithm configurations ---")
     for algo_conf_log in final_algorithms_for_main_run:
         logger.info(f"Will run: {algo_conf_log.get('display_name')}, Module: {algo_conf_log.get('module_name')}, Params: {algo_conf_log.get('param_overrides', 'Defaults')}")
 
-
+    # --- Main Processing and Video Generation ---
     all_metrics_summary, images_processed_count = _process_images_and_write_video(
         image_filenames_to_process=image_list_for_main_run,
         cfg_obj=cfg,
@@ -848,23 +860,19 @@ def main_comparison_orchestrator():
     logger.info(f"Processing and video writing completed for {images_processed_count} images.")
     
     if images_processed_count > 0 and all_metrics_summary:
-        logger.info(f"Results and metrics saved for {images_processed_count} images. Check output directory: {cfg.OUTPUT_VIS_DIR}")
-        # Call save_and_print_metrics_summary from .utils
+        logger.info(f"Results and metrics saved. Check output directory: {cfg.OUTPUT_VIS_DIR}")
         lane_utils.save_and_print_metrics_summary(
             all_metrics_summary, 
             cfg.OUTPUT_VIS_DIR, 
             metrics_filename=getattr(cfg, "METRICS_SUMMARY_FILENAME", "metrics_summary.json")
         )
-        # New call to print the console table
         lane_utils.print_metrics_table_to_console(all_metrics_summary, cfg.ALGORITHMS_TO_RUN)
-    elif images_processed_count == 0 :
-        logger.warning("No images were processed successfully in the main run. Check logs for errors.")
-    else: # Images processed but no metrics summary (should not happen if processing occurred)
-        logger.warning("Images processed, but no metrics summary was generated. Check logic.")
+    elif images_processed_count == 0:
+        logger.warning("No images were processed successfully in the main run.")
+    else:
+        logger.warning("Images processed, but no metrics summary was generated.")
     
     # --- Script Completion ---
-
-    # Auto-play video if configured and file exists
     if hasattr(cfg, 'AUTO_PLAY_VIDEO_ON_COMPLETION') and cfg.AUTO_PLAY_VIDEO_ON_COMPLETION:
         video_file_path = os.path.join(cfg.OUTPUT_VIS_DIR, cfg.OUTPUT_VIDEO_FILENAME)
         if os.path.exists(video_file_path):
@@ -879,13 +887,10 @@ def main_comparison_orchestrator():
             logger.warning(f"Video auto-play enabled, but video file not found: {video_file_path}")
 
     logger.info("Lane comparison script completed.")
-    #print("DEBUG: Lane comparison script completed") # DEBUG PRINT END
+    return all_metrics_summary, images_processed_count
 
 
 if __name__ == "__main__":
-    #print("DEBUG: Inside if __name__ == '__main__' block") # DEBUG PRINT 2
     multiprocessing.freeze_support()
-    #print("DEBUG: multiprocessing.freeze_support() called") # DEBUG PRINT 3
-    main_comparison_orchestrator()
-    #print("DEBUG: main_comparison_orchestrator() finished") # DEBUG PRINT 5
+    main()
 

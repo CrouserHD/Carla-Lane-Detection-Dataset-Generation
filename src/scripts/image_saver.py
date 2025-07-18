@@ -26,10 +26,14 @@ class ImageSaver():
         self.image_name = 0
         self.image_name_gt = 0
         
+        # Create the main saving directory if it doesn't exist
+        if not os.path.isdir(saving_directory):
+            os.makedirs(saving_directory)
+
         for i, image_set in enumerate(self.load_imagesets()):
             if(image_set.shape[0] == cfg.number_of_images):
                 for image in image_set:
-                    self.save_images_with_lanepoints(image)
+                    # self.save_images_with_lanepoints(image)
                     self.save_image_to_disk(image)
                 print('Saving imageset', i)
         
@@ -59,28 +63,17 @@ class ImageSaver():
     def save_image_to_disk(self, image_array):
         """
         Converts the numpy array into .jpg images and saves it to a specific directory.
-        Changes the label according to its calculated category and appends the label to the final json-file if the category is not already 
-        full (defined by max_files_per_classification). This balances the input data for the algorithm
-        In the actual implementation a image with the category nolanes wont be saved
-        
-        Args:
-            image_array: numpy array
         """
         
         image = Image.fromarray(cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB), 'RGB')
         
-        save_name = saving_directory + str(self.label_loader2.calculate_folder(cfg.h_samples))
-        if not "nolanes" in save_name:
-            folder = os.path.dirname(save_name)
-            if not os.path.isdir(folder):
-                os.makedirs(folder)
-            files_in_folder = len([name for name in os.listdir(folder) if os.path.isfile(os.path.join(folder, name))])
-            if files_in_folder < cfg.max_files_per_classification:
-                save_name = save_name + f'{(files_in_folder + 1) :04d}' + '.jpg'
-                #image.save(save_name + '.jpg', 'JPEG')
+        # Generate a unique filename
+        save_name = os.path.join(saving_directory, f'{self.image_name:04d}.jpg')
+        self.image_name += 1
 
-                self.label_loader2.update_rawfile_in(save_name)
-                image.save(save_name, 'JPEG')
+        # Update the path in the json file
+        self.label_loader2.update_rawfile_in(save_name)
+        image.save(save_name, 'JPEG')
 
 
     def save_images_with_lanepoints(self, image_array):

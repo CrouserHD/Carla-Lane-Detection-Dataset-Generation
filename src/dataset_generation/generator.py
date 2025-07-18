@@ -30,6 +30,10 @@ import sys
 import math
 import random
 import time
+from collections import deque
+from .data_saver import BufferedImageSaver
+from .utils import LabelSaver
+import config as cfg
 
 try:
     sys.path.append(glob.glob('../../carla/dist/carla-*%d.%d-%s.egg' % (
@@ -55,11 +59,6 @@ try:
     import queue
 except ImportError:
     import Queue as queue
-
-from collections import deque
-from scripts.buffered_saver import BufferedImageSaver
-from scripts.label_saver import LabelSaver
-import config as cfg
 
 # ==============================================================================
 # -- Global Variables ---------------------------------------------------------
@@ -937,8 +936,29 @@ class LaneMarkings():
 # ==============================================================================
 
 def main():
-    carlaGame = CarlaGame()
-    carlaGame.execute()
+    """
+    Main function to start the CARLA dataset generation.
+    """
+    game = None
+    try:
+        game = CarlaGame()
+        game.execute()
+    except Exception as e:
+        print(f"An error occurred during the execution of the game: {e}")
+    finally:
+        if game:
+            print('Destroying actors and cleaning up.')
+            for actor in game.actor_list:
+                try:
+                    actor.destroy()
+                except Exception as e:
+                    print(f"Error destroying actor {actor.id}: {e}")
+            
+            if hasattr(game, 'vehiclemanager'):
+                game.vehiclemanager.destroy()
+
+            pygame.quit()
+            print('Done.')
 
 
 if __name__ == '__main__':

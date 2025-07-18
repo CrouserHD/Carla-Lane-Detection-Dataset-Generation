@@ -165,49 +165,28 @@ def main():
             print(f"Warning: 'raw_file' not found in entry {i}. Skipping.")
             continue
         
+        # Use the path from the JSON file directly, relative to the workspace root
+        image_path = os.path.join(WORKSPACE_ROOT, image_path_from_json)
+        image_path = os.path.normpath(image_path) # Normalize path for consistency
         base_filename = os.path.basename(image_path_from_json)
-        image_path = os.path.join(WORKSPACE_ROOT, "data", "debug", "Town03_Opt", base_filename)
 
         if not os.path.exists(image_path):
-            print(f"Warning: Image path '{image_path}' (derived from '{image_path_from_json}') not found for entry {i}. Skipping.")
+            print(f"Warning: Image path '{image_path}' (derived from '{image_path_from_json}') not found. Skipping.")
             continue
 
         output_image_path = os.path.join(OUTPUT_IMAGE_DIR, base_filename)
 
-        if not lanes: 
-            print(f"Info: No lanes to draw for image {base_filename} (entry {i}). Copying original.")
-            try:
-                original_img = cv2.imread(image_path)
-                if original_img is not None:
-                    cv2.imwrite(output_image_path, original_img)
-                    processed_image_count += 1
-                else:
-                    print(f"Warning: Could not read image {image_path} for copying. Skipping.")
-            except Exception as e:
-                print(f"Error copying image {image_path}: {e}")
-            continue 
-
-        if not h_samples:
-            print(f"Warning: 'h_samples' not found for entry {i} (image: {base_filename}) though 'lanes' are present. Copying original image.")
-            try:
-                original_img = cv2.imread(image_path)
-                if original_img is not None:
-                    cv2.imwrite(output_image_path, original_img)
-                    processed_image_count += 1
-                else:
-                    print(f"Warning: Could not read image {image_path} for copying. Skipping.")
-            except Exception as e:
-                print(f"Error copying image {image_path}: {e}")
+        # Always copy the original image, do not draw lanes
+        try:
+            original_img = cv2.imread(image_path)
+            if original_img is not None:
+                cv2.imwrite(output_image_path, original_img)
+                processed_image_count += 1
+            else:
+                print(f"Warning: Could not read image {image_path} for copying. Skipping.")
+        except Exception as e:
+            print(f"Error copying image {image_path}: {e}")
             continue
-
-        img_with_lanes = draw_lanes_on_image(image_path, lanes, h_samples)
-        
-        if img_with_lanes is None: # Should not happen if image_path is valid, but good check
-            print(f"Warning: Failed to process image {image_path}. Skipping.")
-            continue
-
-        cv2.imwrite(output_image_path, img_with_lanes)
-        processed_image_count += 1
         
         if (i + 1) % 50 == 0:
             print(f"Processed {i+1}/{num_entries_to_process} images...")
