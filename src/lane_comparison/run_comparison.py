@@ -32,6 +32,13 @@ from .parameter_sweeper import (
     optimize_parameters_for_algorithm # Import the optimizer function
 )
 
+# Try to import dashboard integration
+try:
+    from ..gui.dashboard_integration import initialize_dashboard, get_dashboard, setup_dashboard_logging
+    DASHBOARD_AVAILABLE = True
+except ImportError:
+    DASHBOARD_AVAILABLE = False
+
 #print("DEBUG: Imports in run_comparison.py completed") # DEBUG PRINT 1
 
 # Configure logging
@@ -246,7 +253,8 @@ def _mp_worker_process_single_algo_all_images(
 def _process_images_and_write_video(
     image_filenames_to_process,
     cfg_obj, # The main config object (e.g., imported 'cfg' module)
-    final_loaded_algorithms_configs
+    final_loaded_algorithms_configs,
+    dashboard=None  # Dashboard integration
 ):
     overall_start_time = time.time()
 
@@ -270,6 +278,9 @@ def _process_images_and_write_video(
     # --- Phase 1: Algorithm Processing (Multiprocessing) ---
     #logger.info(f"Starting algorithm processing for {len(image_filenames_to_process)} images "
     #            f"with {len(final_loaded_algorithms_configs)} algorithms using multiprocessing.")
+    
+    if dashboard:
+        dashboard.update_phase("Algorithm Processing")
 
     pool_args = []
     for algo_config in final_loaded_algorithms_configs:
@@ -317,6 +328,11 @@ def _process_images_and_write_video(
             all_detected_lanes_by_algo_then_image[algo_name_res] = lanes_dict_res
             algo_exec_times[algo_name_res] = exec_time_res
             algo_frame_counts[algo_name_res] = frames_res
+            
+            # Update dashboard with algorithm completion
+            if dashboard:
+                dashboard.update_algorithm_progress(algo_name_res, 100.0)
+                dashboard.add_log(f"Algorithm '{algo_name_res}' completed processing {frames_res} images")
         else:
             logger.error("Received an empty result from an algorithm process. This should not happen if worker returns tuple.")
 
@@ -325,6 +341,8 @@ def _process_images_and_write_video(
 
     # --- Phase 2: Image/Video Generation (Sequential) ---
     logger.info("Starting image/video generation phase...")
+    if dashboard:
+        dashboard.update_phase("Image/Video Generation")
     
     # Check if any images were processed in Phase 1
     # A simple check: if the sum of frames processed by algos is zero, but we had input images.
@@ -339,6 +357,10 @@ def _process_images_and_write_video(
     for i, image_filename in enumerate(image_filenames_to_process):
         # This print is for the main process, indicating output generation progress
         #print(f"[MainProcess] Generating output for image {images_processed_count_for_output + 1}/{len(image_filenames_to_process)}: {image_filename}...")
+        
+        # Update dashboard with current image progress
+        if dashboard:
+            dashboard.update_image_progress(image_filename, images_processed_count_for_output + 1)
 
         image_path = os.path.join(cfg_obj.IMAGE_SOURCE_DIR, image_filename)
         base_image = cv2.imread(image_path)
@@ -411,7 +433,12 @@ def _process_images_and_write_video(
                 video_writer.write(comparison_frame)
             
             output_image_filename = f"comp_{image_filename}"
-            save_image(comparison_frame, cfg_obj.OUTPUT_VIS_DIR, output_image_filename)
+            output_image_path = save_image(comparison_frame, cfg_obj.OUTPUT_VIS_DIR, output_image_filename)
+            
+            # Update dashboard with preview image
+            if dashboard and output_image_path:
+                dashboard.update_preview_image(output_image_path)
+                
         else:
             logger.warning(f"Comparison frame is None or empty for image {image_filename}. Skipping write.")
         
@@ -420,7 +447,13 @@ def _process_images_and_write_video(
     # --- Finalization ---
     if video_writer is not None and video_writer.isOpened():
         video_writer.release()
-        logger.info(f"Video successfully saved: {os.path.join(cfg_obj.OUTPUT_VIS_DIR, cfg_obj.OUTPUT_VIDEO_FILENAME)}")
+        video_path = os.path.join(cfg_obj.OUTPUT_VIS_DIR, cfg_obj.OUTPUT_VIDEO_FILENAME)
+        logger.info(f"Video successfully saved: {video_path}")
+        
+        # Update dashboard with the created video
+        if dashboard:
+            dashboard.update_preview_video(video_path)
+            
     elif images_processed_count_for_output > 0 and (video_writer is None or not video_writer.isOpened()) and not first_image_for_video:
         # This case means we processed images for output, but video writer had an issue (wasn't opened or closed prematurely)
         logger.warning("Images processed for output, but video writer was not properly initialized or failed. No video saved.")
@@ -584,32 +617,58 @@ def _evaluation_callback_for_optimizer(
 
 
 def main_comparison_orchestrator():
-    #print("DEBUG: main_comparison_orchestrator() called") # DEBUG PRINT 4
-    args = parse_command_line_arguments(cfg) # parse_command_line_arguments is from .utils
-    #print(f"DEBUG: Parsed command line arguments: {args}") # DEBUG PRINT 4.1
+    # Initialize dashboard if available
+    dashboard = None
+    if DASHBOARD_AVAILABLE:
+        try:
+            dashboard = initialize_dashboard("http://localhost:5000", enabled=True)
+            setup_dashboard_logging(logger)
+            logger.info("Dashboard integration initialized")
+        except Exception as e:
+            logger.warning(f"Dashboard initialization failed: {e}")
+            dashboard = None
+    
+    args = parse_command_line_arguments(cfg)
+
+    # Override algorithm selection from command line/dashboard if provided
+    if args.algorithm:
+        logger.info(f"Overriding algorithm selection from command line/dashboard: {args.algorithm}")
+        selected_keys = []
+        for selected_name in args.algorithm:
+            found_key = None
+            # Match against the config dict key or module_name suffix
+            if selected_name in cfg.ALGORITHMS:
+                found_key = selected_name
+            else:
+                # Match against module_name or display_name
+                for key, config in cfg.ALGORITHMS.items():
+                    module_name = config.get('module_name')
+                    if module_name == selected_name or config.get('display_name') == selected_name or key == selected_name:
+                        found_key = key
+                        break
+            if found_key:
+                selected_keys.append(found_key)
+            else:
+                logger.warning(f"Dashboard requested algorithm '{selected_name}', but it was not found in cfg.ALGORITHMS.")
+        cfg.ALGORITHMS_TO_RUN_KEYS = selected_keys
+        logger.info(f"Updated algorithms to run: {cfg.ALGORITHMS_TO_RUN_KEYS}")
+
+    if args.dashboard:
+        logger.info("Dashboard mode enabled")
+        if dashboard:
+            dashboard.add_log("Dashboard mode enabled", "info")
 
     # --- Configuration & Setup ---
-    PERFORM_OPTIMIZATION = getattr(cfg, "PERFORM_OPTIMIZATION_PHASE", True) # Control optimization phase
+    PERFORM_OPTIMIZATION = getattr(cfg, "PERFORM_OPTIMIZATION_PHASE", False)
 
-    # Determine active algorithms from the main config (cfg.ALGORITHMS_TO_RUN)
-    # These are the base definitions before any sweep or optimization.
-    # The structure in cfg.ALGORITHMS_TO_RUN is a list of dicts.
-    # We need to transform this into a dictionary keyed by a unique name for easier lookup,
-    # if cfg.ALGORITHMS is intended to be such a dictionary.
-    # For now, assume cfg.ALGORITHMS is already the desired dict format.
-    # If not, it needs to be constructed from cfg.ALGORITHMS_TO_RUN.
-    # Let's assume cfg.ALGORITHMS is the primary source for algorithm definitions for optimization.
-
-    # Initialize ground_truth_data
     ground_truth_data = {}
     if os.path.exists(cfg.JSON_GT_PATH):
         try:
             with open(cfg.JSON_GT_PATH, 'r') as f:
                 logger.info(f"Attempting to load ground truth data from: {cfg.JSON_GT_PATH}")
-                lines_read = 0
-                entries_added = 0
-                for line_number, line in enumerate(f):
-                    lines_read += 1
+                if dashboard:
+                    dashboard.update_phase("Loading ground truth data...")
+                for line in f:
                     line = line.strip()
                     if not line: continue
                     try:
@@ -617,27 +676,14 @@ def main_comparison_orchestrator():
                         raw_file_path = gt_entry.get("raw_file")
                         if raw_file_path:
                             image_filename = os.path.basename(raw_file_path)
-                            gt_lanes_data = gt_entry.get("lanes")
-                            gt_h_samples_data = gt_entry.get("h_samples")
-                            if gt_lanes_data is not None and gt_h_samples_data is not None:
-                                ground_truth_data[image_filename] = {
-                                    "lanes": gt_lanes_data,
-                                    "h_samples": gt_h_samples_data
-                                }
-                                entries_added += 1
-                            else:
-                                logger.warning(f"GT entry for '{image_filename}' (from '{raw_file_path}') on line {line_number + 1} missing 'lanes' or 'h_samples'.")
-                        else:
-                            logger.warning(f"GT entry in {cfg.JSON_GT_PATH} on line {line_number + 1} missing 'raw_file' key.")
-                    except json.JSONDecodeError as e_line:
-                        logger.error(f"Error decoding JSON line from {cfg.JSON_GT_PATH} on line {line_number + 1}: {e_line}.")
-                    except Exception as e_entry:
-                         logger.error(f"Unexpected error processing GT entry on line {line_number + 1}: {e_entry}.")
-                logger.info(f"GT Load: Read {lines_read} lines. Successfully processed {entries_added} entries.")
-            if not ground_truth_data:
-                logger.warning(f"Ground truth file {cfg.JSON_GT_PATH} was read, but no valid entries were processed.")
-        except Exception as e_file:
-            logger.error(f"Failed to read/process ground truth file {cfg.JSON_GT_PATH}: {e_file}.")
+                            ground_truth_data[image_filename] = {
+                                "lanes": gt_entry.get("lanes"),
+                                "h_samples": gt_entry.get("h_samples")
+                            }
+                    except json.JSONDecodeError:
+                        logger.error(f"Error decoding JSON line from {cfg.JSON_GT_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to read/process ground truth file {cfg.JSON_GT_PATH}: {e}")
     else:
         logger.warning(f"Ground truth file not found: {cfg.JSON_GT_PATH}.")
 
@@ -649,9 +695,7 @@ def main_comparison_orchestrator():
         os.makedirs(cfg.OUTPUT_VIS_DIR, exist_ok=True)
 
     try:
-        logger.info(f"Attempting to list files from IMAGE_SOURCE_DIR: {cfg.IMAGE_SOURCE_DIR}")
-        available_image_files = [f for f in os.listdir(cfg.IMAGE_SOURCE_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        available_image_files.sort()
+        available_image_files = sorted([f for f in os.listdir(cfg.IMAGE_SOURCE_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
         logger.info(f"Found {len(available_image_files)} image files.")
     except FileNotFoundError:
         logger.error(f"Image directory not found: {cfg.IMAGE_SOURCE_DIR}"); return
@@ -667,219 +711,132 @@ def main_comparison_orchestrator():
     if num_to_process_from_arg is not None and num_to_process_from_arg > 0:
         num_actually_to_process = min(len(images_to_consider_all), num_to_process_from_arg)
     
-    if num_actually_to_process == 0:
-        logger.warning("No images to process after applying start_index and num_images."); return
-        
     image_list_for_main_run = images_to_consider_all[:num_actually_to_process]
-    logger.info(f"Main run will process {len(image_list_for_main_run)} images, starting with {image_list_for_main_run[0] if image_list_for_main_run else 'N/A'}.")
+    logger.info(f"Main run will process {len(image_list_for_main_run)} images.")
+
+    if dashboard:
+        active_algo_names = [cfg.ALGORITHMS[key]['display_name'] for key in cfg.ALGORITHMS_TO_RUN_KEYS if key in cfg.ALGORITHMS]
+        dashboard.start_processing(len(image_list_for_main_run), active_algo_names)
 
     # --- Parameter Optimization Phase ---
-    optimized_algo_params = {} # Store optimized params here, keyed by algo_name from cfg.ALGORITHMS
-
+    optimized_algo_params = {}
     if PERFORM_OPTIMIZATION:
         logger.info("--- Starting Parameter Optimization Phase ---")
-        num_images_for_opt_phase = min(len(available_image_files), getattr(cfg, "NUM_IMAGES_FOR_OPTIMIZATION_PHASE", 50))
+        if dashboard: dashboard.update_phase("Parameter Optimization Phase")
         
-        image_paths_for_optimization = []
-        if num_images_for_opt_phase > 0 and available_image_files:
-             # Sample from all available images, not just the main run list, to get diverse data
-            image_paths_for_optimization = random.sample(
-                [os.path.join(cfg.IMAGE_SOURCE_DIR, f) for f in available_image_files], 
-                min(num_images_for_opt_phase, len(available_image_files)) # Ensure sample size doesn't exceed available images
-            )
-            logger.info(f"Selected {len(image_paths_for_optimization)} images randomly for the optimization phase.")
+        num_images_for_opt = min(len(available_image_files), cfg.NUM_IMAGES_FOR_OPTIMIZATION_PHASE)
+        if num_images_for_opt > 0 and available_image_files:
+            image_paths_for_opt = random.sample([os.path.join(cfg.IMAGE_SOURCE_DIR, f) for f in available_image_files], num_images_for_opt)
+            logger.info(f"Selected {len(image_paths_for_opt)} images for optimization.")
         else:
-            logger.warning("Not enough images available or NUM_IMAGES_FOR_OPTIMIZATION_PHASE is 0. Skipping optimization phase.")
-            PERFORM_OPTIMIZATION = False # Disable optimization if no images
+            logger.warning("Not enough images for optimization. Skipping phase.")
+            PERFORM_OPTIMIZATION = False
 
         if PERFORM_OPTIMIZATION and not ground_truth_data:
-            logger.warning("No ground truth data loaded. Parameter optimization requires GT and will be skipped.")
+            logger.warning("No ground truth data. Skipping optimization.")
             PERFORM_OPTIMIZATION = False
 
         if PERFORM_OPTIMIZATION:
-            # Iterate through algorithms defined in cfg.ALGORITHMS (assuming this is the dict structure)
-            # Example: cfg.ALGORITHMS = {"carnd_algorithm": {"module": ..., "function": ..., "parameters": {...}}, ...}
-            # This needs to be aligned with how ALGORITHMS_TO_RUN is structured and used later.
-            # For now, let's assume cfg.ALGORITHMS exists and is the master list for optimization.
-            
-            # Check if cfg.ALGORITHMS exists and is a dictionary
-            if not hasattr(cfg, 'ALGORITHMS') or not isinstance(cfg.ALGORITHMS, dict):
-                logger.error("cfg.ALGORITHMS is not defined or not a dictionary. Cannot perform optimization. Please define it in lane_comparison_config.py")
-                PERFORM_OPTIMIZATION = False
+            for algo_key, algo_config in cfg.ALGORITHMS.items():
+                opt_settings = cfg.OPTIMIZATION_SETTINGS.get(algo_key)
+                if not (opt_settings and opt_settings.get("enabled")):
+                    logger.info(f"Optimization not enabled for {algo_key}. Using default parameters.")
+                    optimized_algo_params[algo_key] = algo_config.get("params", {}).copy()
+                    continue
 
-            if PERFORM_OPTIMIZATION:
-                for algo_name_key, algo_config_entry in cfg.ALGORITHMS.items():
-                    if algo_name_key == "lanenet_algorithm": # Skip LaneNet
-                        logger.info(f"Skipping parameter optimization for {algo_name_key} (LaneNet).")
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy()
-                        continue
-
-                    opt_settings_for_algo = cfg.OPTIMIZATION_SETTINGS.get(algo_name_key)
-                    
-                    # Corrected multi-line if condition
-                    skip_optimization_for_this_algo = False
-                    if not opt_settings_for_algo:
-                        skip_optimization_for_this_algo = True
-                    elif not opt_settings_for_algo.get("enabled", False): # Check "enabled" key
-                        skip_optimization_for_this_algo = True
-                    elif not opt_settings_for_algo.get("parameters_to_tune"): # Check "parameters_to_tune" key
-                        skip_optimization_for_this_algo = True
-
-                    if skip_optimization_for_this_algo:
-                        logger.info(f"Optimization not enabled or no parameters to tune for {algo_name_key}. Using default parameters.")
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy()
-                        continue
-                    
-                    logger.info(f"Starting parameter optimization for {algo_name_key}...")
-                    
-                    # algo_config_entry is the base config for this algorithm from cfg.ALGORITHMS
-                    # It should contain 'module', 'function', and 'parameters' (initial defaults)
-                    algo_module_name = algo_config_entry.get("module")
-                    algo_fn_name = algo_config_entry.get("function")
-
-                    if not algo_module_name or not algo_fn_name:
-                        logger.error(f"Algorithm {algo_name_key} in cfg.ALGORITHMS is missing 'module' or 'function' definition. Skipping optimization.")
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy()
-                        continue
-
-                    try:
-                        best_params, best_score = optimize_parameters_for_algorithm(
-                            algorithm_name_passed_in=algo_name_key,
-                            base_algo_config=algo_config_entry, 
-                            algo_module_name=algo_module_name,
-                            algo_fn_name=algo_fn_name,
-                            parameters_to_tune_config=opt_settings_for_algo["parameters_to_tune"],
-                            image_path_subset=image_paths_for_optimization,
-                            evaluation_callback=_evaluation_callback_for_optimizer,
-                            logger_instance=logger,
-                            cfg_module=cfg,
-                            # Additional args for _evaluation_callback_for_optimizer:
-                            eval_callback_additional_args=(ground_truth_data, cfg.H_SAMPLES) 
-                        )
-                        logger.info(f"Optimization for {algo_name_key} complete. Best F1: {best_score:.4f}. Optimized Params: {best_params}")
-                        optimized_algo_params[algo_name_key] = best_params
-                    except Exception as e_opt:
-                        logger.error(f"Error during optimization for {algo_name_key}: {e_opt}", exc_info=True)
-                        optimized_algo_params[algo_name_key] = algo_config_entry.get("parameters", {}).copy() # Fallback to defaults
+                logger.info(f"Starting optimization for {algo_key}...")
+                if dashboard: dashboard.add_log(f"Optimizing {algo_key}...")
+                
+                try:
+                    best_params, best_score = optimize_parameters_for_algorithm(
+                        algorithm_name_passed_in=algo_key,
+                        base_algo_config=algo_config,
+                        algo_module_name=algo_config["module_name"],
+                        algo_fn_name=algo_config["function_name"],
+                        parameters_to_tune_config=opt_settings["parameters_to_tune"],
+                        image_path_subset=image_paths_for_opt,
+                        evaluation_callback=_evaluation_callback_for_optimizer,
+                        logger_instance=logger,
+                        cfg_module=cfg,
+                        eval_callback_additional_args=(ground_truth_data, cfg.H_SAMPLES)
+                    )
+                    logger.info(f"Optimization for {algo_key} complete. Best F1: {best_score:.4f}. Params: {best_params}")
+                    if dashboard: dashboard.add_log(f"Optimization for {algo_key} complete: F1={best_score:.4f}")
+                    optimized_algo_params[algo_key] = best_params
+                except Exception as e:
+                    logger.error(f"Error during optimization for {algo_key}: {e}", exc_info=True)
+                    if dashboard: dashboard.add_log(f"Optimization failed for {algo_key}: {e}", 'error')
+                    optimized_algo_params[algo_key] = algo_config.get("params", {}).copy()
 
     # --- Prepare Algorithm Configurations for Main Run ---
-    # Start with ALGORITHMS_TO_RUN from config, which defines which ones are active for the main comparison
-    
     final_algorithms_for_main_run = []
-    for algo_run_config in cfg.ALGORITHMS_TO_RUN: # This is a list of dicts
-        if not algo_run_config.get("active", False):
+    for algo_key in cfg.ALGORITHMS_TO_RUN_KEYS:
+        if algo_key not in cfg.ALGORITHMS:
+            logger.warning(f"Algorithm key '{algo_key}' not in ALGORITHMS dict. Skipping.")
             continue
-
-        algo_name_for_run = algo_run_config.get("display_name") # Or derive a key if display_name isn't unique/stable
-        if not algo_name_for_run:
-            logger.warning(f"Algorithm config in ALGORITHMS_TO_RUN is missing 'display_name'. Skipping: {algo_run_config}")
-            continue
-            
-        # Create a mutable copy for this run
-        current_algo_run_config = copy.deepcopy(algo_run_config)
-
-        # If optimization was performed and parameters were found for this algorithm, apply them.
-        # The key used for optimized_algo_params should match how we identify algorithms from cfg.ALGORITHMS.
-        # Let's assume the 'display_name' from ALGORITHMS_TO_RUN can map to the keys in cfg.ALGORITHMS and OPTIMIZATION_SETTINGS.
-        # This requires careful naming consistency. A safer way is to use a unique internal name.
-        # For now, let's try matching based on 'module_name' as it's more likely to be a unique key.
         
-        # Find the corresponding entry in cfg.ALGORITHMS to get the key used in optimization
-        optimization_key = None
-        if hasattr(cfg, 'ALGORITHMS') and isinstance(cfg.ALGORITHMS, dict):
-            for opt_key, opt_cfg_val in cfg.ALGORITHMS.items():
-                # Corrected multi-line if condition
-                if opt_cfg_val.get("module") == current_algo_run_config.get("module_name") and \
-                   opt_cfg_val.get("function") == current_algo_run_config.get("function_name"):
-                    optimization_key = opt_key
-                    break
+        algo_config = copy.deepcopy(cfg.ALGORITHMS[algo_key])
         
-        if optimization_key and optimization_key in optimized_algo_params:
-            logger.info(f"Applying optimized parameters to {algo_name_for_run} (key: {optimization_key}) for the main run.")
-            # The 'param_overrides' key is used by the worker to apply these.
-            # Ensure this doesn't conflict with how 'parameters' in cfg.ALGORITHMS is structured.
+        # Apply optimized parameters if they exist, otherwise use defaults
+        if PERFORM_OPTIMIZATION and algo_key in optimized_algo_params:
+            logger.info(f"Applying optimized parameters to {algo_key} for the main run.")
             # The worker expects 'param_overrides' to be flat key-value pairs.
-            # The optimized_algo_params should be in this flat format.
-            current_algo_run_config["param_overrides"] = optimized_algo_params[optimization_key]
-        elif PERFORM_OPTIMIZATION: # Optimization was on, but no params for this specific algo (e.g. skipped, error)
-             logger.info(f"No optimized parameters found or applied for {algo_name_for_run} (opt key: {optimization_key}). Using defaults from ALGORITHMS_TO_RUN or base config.")
-             # Ensure it uses its original default parameters if any are defined in ALGORITHMS_TO_RUN itself
-             if "params" in current_algo_run_config: # e.g. LaneNet
-                 current_algo_run_config["param_overrides"] = current_algo_run_config["params"]
+            algo_config["param_overrides"] = optimized_algo_params[algo_key]
+        else:
+            # Use default params from the config
+            algo_config["param_overrides"] = algo_config.get("params", {})
 
-
-        # Parameter sweep expansion (currently disabled by PERFORM_HOUGH_TRANSFORM etc. flags at top)
-        # This part would need to be integrated carefully if sweeps and optimization are both active.
-        # For now, assuming sweeps are off if optimization is on, or they are mutually exclusive.
-        # The expand_algorithms_for_sweeps function might need to be adapted if optimized params are the new base.
-        
-        # For simplicity, if optimization is on, we assume no sweeps.
-        # If optimization is off, the original sweep logic could apply.
-        # The current structure of expand_algorithms_for_sweeps takes active_algorithms_from_config.
-        # We are building final_algorithms_for_main_run here.
-        
-        # If not doing sweeps (as PERFORM_... flags are False), just add the (potentially optimized) algo config.
-        final_algorithms_for_main_run.append(current_algo_run_config)
-
-
-    # If parameter sweeps were to be performed (and PERFORM_... flags were True),
-    # the logic for expand_algorithms_for_sweeps would be here,
-    # potentially taking the `final_algorithms_for_main_run` (with optimized params) as a base.
-    # For now, the original sweep flags (PERFORM_HOUGH_TRANSFORM etc.) are hardcoded to False.
-    # If they were True, this would be more complex.
-    # Let's assume if PERFORM_OPTIMIZATION is True, those sweep flags are effectively False for this path.
+        final_algorithms_for_main_run.append(algo_config)
 
     if not final_algorithms_for_main_run:
-        logger.warning("No algorithms are configured to run after optimization/preparation. Exiting.")
+        logger.warning("No algorithms configured to run. Exiting.")
         return
 
     logger.info(f"--- Starting Main Comparison Run with {len(final_algorithms_for_main_run)} algorithm configurations ---")
-    for algo_conf_log in final_algorithms_for_main_run:
-        logger.info(f"Will run: {algo_conf_log.get('display_name')}, Module: {algo_conf_log.get('module_name')}, Params: {algo_conf_log.get('param_overrides', 'Defaults')}")
-
+    if dashboard: dashboard.update_phase("Main Comparison Run")
+    for algo_conf in final_algorithms_for_main_run:
+        logger.info(f"Will run: {algo_conf.get('display_name')}, Params: {algo_conf.get('param_overrides', 'Defaults')}")
 
     all_metrics_summary, images_processed_count = _process_images_and_write_video(
         image_filenames_to_process=image_list_for_main_run,
         cfg_obj=cfg,
-        final_loaded_algorithms_configs=final_algorithms_for_main_run
+        final_loaded_algorithms_configs=final_algorithms_for_main_run,
+        dashboard=dashboard
     )
 
     # --- Finalization and Reporting ---
     logger.info(f"Processing and video writing completed for {images_processed_count} images.")
+    if dashboard:
+        dashboard.update_phase("Finalizing Results")
+        dashboard.update_metrics(all_metrics_summary)
     
     if images_processed_count > 0 and all_metrics_summary:
-        logger.info(f"Results and metrics saved for {images_processed_count} images. Check output directory: {cfg.OUTPUT_VIS_DIR}")
-        # Call save_and_print_metrics_summary from .utils
-        lane_utils.save_and_print_metrics_summary(
-            all_metrics_summary, 
-            cfg.OUTPUT_VIS_DIR, 
-            metrics_filename=getattr(cfg, "METRICS_SUMMARY_FILENAME", "metrics_summary.json")
+        save_and_print_metrics_summary(
+            all_metrics_summary,
+            cfg.OUTPUT_VIS_DIR,
+            metrics_filename=cfg.METRICS_SUMMARY_FILENAME
         )
-        # New call to print the console table
-        lane_utils.print_metrics_table_to_console(all_metrics_summary, cfg.ALGORITHMS_TO_RUN)
-    elif images_processed_count == 0 :
-        logger.warning("No images were processed successfully in the main run. Check logs for errors.")
-    else: # Images processed but no metrics summary (should not happen if processing occurred)
-        logger.warning("Images processed, but no metrics summary was generated. Check logic.")
-    
-    # --- Script Completion ---
+        # The print_metrics_table_to_console function needs the final list of algorithms that were run
+        lane_utils.print_metrics_table_to_console(all_metrics_summary, final_algorithms_for_main_run)
 
-    # Auto-play video if configured and file exists
-    if hasattr(cfg, 'AUTO_PLAY_VIDEO_ON_COMPLETION') and cfg.AUTO_PLAY_VIDEO_ON_COMPLETION:
+    if cfg.AUTO_PLAY_VIDEO_ON_COMPLETION:
         video_file_path = os.path.join(cfg.OUTPUT_VIS_DIR, cfg.OUTPUT_VIDEO_FILENAME)
         if os.path.exists(video_file_path):
             try:
                 logger.info(f"Attempting to auto-play video: {video_file_path}")
-                os.startfile(video_file_path) # Windows specific
-            except AttributeError:
-                logger.warning("os.startfile is not available on this system. Cannot auto-play video.")
+                os.startfile(video_file_path)
             except Exception as e:
-                logger.error(f"Failed to auto-play video {video_file_path}: {e}")
+                logger.error(f"Failed to auto-play video: {e}")
+            # Send the final video to the dashboard preview
+            if dashboard:
+                dashboard.update_preview_video(video_file_path)
         else:
-            logger.warning(f"Video auto-play enabled, but video file not found: {video_file_path}")
+            logger.warning(f"Video auto-play enabled, but file not found: {video_file_path}")
 
     logger.info("Lane comparison script completed.")
-    #print("DEBUG: Lane comparison script completed") # DEBUG PRINT END
+    if dashboard:
+        dashboard.processing_complete()
+        dashboard.add_log("Lane comparison script completed successfully!", 'success')
 
 
 if __name__ == "__main__":

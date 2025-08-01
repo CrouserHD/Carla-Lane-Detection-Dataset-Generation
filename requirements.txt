@@ -6,3 +6,9 @@ opencv-python
 Pillow
 tabulate
 colorama
+
+# Web Dashboard Dependencies (optional)
+flask>=2.0.0
+flask-socketio>=5.0.0
+eventlet>=0.33.0
+requests>=2.25.0

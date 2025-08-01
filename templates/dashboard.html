@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lane Comparison Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .status-bar {
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: bold;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #6c757d;
+        }
+
+        .status-dot.running { background: #28a745; animation: pulse 2s infinite; }
+        .status-dot.completed { background: #007bff; }
+        .status-dot.error { background: #dc3545; }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .left-panel, .right-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .card h3 {
+            color: #495057;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+
+        .progress-container {
+            margin-bottom: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+
+        .algorithm-progress {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .algorithm-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .algorithm-name {
+            min-width: 120px;
+            font-weight: 500;
+        }
+
+        .algorithm-bar {
+            flex: 1;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .algorithm-fill {
+            height: 100%;
+            background: #007bff;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+
+        .preview-container {
+            text-align: center;
+            max-height: 400px;
+            overflow: hidden;
+            border-radius: 8px;
+            background: #f8f9fa;
+        }
+
+        .preview-image {
+            max-width: 100%;
+            max-height: 400px;
+            border-radius: 8px;
+        }
+
+        .preview-video {
+            max-width: 100%;
+            max-height: 400px;
+            border-radius: 8px;
+        }
+
+        .control-panel {
+            background: #f8f9fa;
+            padding: 20px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .control-section {
+            margin-bottom: 20px;
+        }
+
+        .control-section h4 {
+            margin-bottom: 10px;
+            color: #495057;
+        }
+
+        .algorithm-selection {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .algorithm-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .algorithm-checkbox:hover {
+            background: #e9ecef;
+            border-color: #adb5bd;
+        }
+
+        .algorithm-checkbox.selected {
+            background: #e7f3ff;
+            border-color: #007bff;
+        }
+
+        .algorithm-checkbox input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .start-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .btn-primary:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .input-group label {
+            font-weight: 500;
+            color: #495057;
+        }
+
+        .input-group input {
+            padding: 8px 12px;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            font-size: 1em;
+        }
+
+        .log-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 10px;
+            background: #f8f9fa;
+        }
+
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 0.9em;
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-timestamp {
+            color: #6c757d;
+            font-weight: bold;
+        }
+
+        .log-level-info { color: #17a2b8; }
+        .log-level-success { color: #28a745; }
+        .log-level-warning { color: #ffc107; }
+        .log-level-error { color: #dc3545; }
+
+        .metrics-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        .metrics-table th,
+        .metrics-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .metrics-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚗 Lane Comparison Dashboard</h1>
+            <p>Real-time monitoring of lane detection processing</p>
+        </div>
+
+        <div class="control-panel">
+            <div class="control-section">
+                <h4>🔧 Algorithm Selection</h4>
+                <div class="algorithm-selection" id="algorithmSelection">
+                    <p>Loading algorithms...</p>
+                </div>
+            </div>
+            
+            <div class="control-section">
+                <h4>🚀 Processing Controls</h4>
+                <div class="start-controls">
+                    <button class="btn btn-primary" id="startProcessing">
+                        <span id="startButtonText">Start Lane Detection</span>
+                    </button>
+                    <button class="btn btn-secondary" id="stopProcessing" disabled>
+                        Stop Processing
+                    </button>
+                    <div class="input-group">
+                        <label for="startIndex">Start Index:</label>
+                        <input type="number" id="startIndex" value="0" min="0" max="9999">
+                    </div>
+                    <div class="input-group">
+                        <label for="numImages">Number of Images:</label>
+                        <input type="number" id="numImages" value="100" min="1" max="1000">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Waiting to start...</span>
+            </div>
+            <div class="status-indicator">
+                <span id="currentPhase">Initializing...</span>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="left-panel">
+                <!-- Overall Progress -->
+                <div class="card">
+                    <h3>📊 Overall Progress</h3>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="overallProgress"></div>
+                        </div>
+                        <div class="progress-text">
+                            <span id="progressText">0 / 0 images</span>
+                            <span id="progressPercent">0%</span>
+                        </div>
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value" id="currentFPS">0</div>
+                            <div class="stat-label">FPS</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="remainingTime">--</div>
+                            <div class="stat-label">Remaining</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="currentImage">--</div>
+                            <div class="stat-label">Current Image</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Algorithm Progress -->
+                <div class="card">
+                    <h3>🔧 Algorithm Progress</h3>
+                    <div class="algorithm-progress" id="algorithmProgress">
+                        <p>No algorithms loaded</p>
+                    </div>
+                </div>
+
+                <!-- Metrics -->
+                <div class="card">
+                    <h3>📈 Performance Metrics</h3>
+                    <div id="metricsContent">
+                        <p>Metrics will appear here during processing...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="right-panel">
+                <!-- Live Preview -->
+                <div class="card">
+                    <h3>🖼️ Live Preview</h3>
+                    <div class="preview-container" id="previewContainer">
+                        <p>Preview will appear here...</p>
+                    </div>
+                </div>
+
+                <!-- Log Messages -->
+                <div class="card">
+                    <h3>📝 Log Messages</h3>
+                    <div class="log-container" id="logContainer">
+                        <div class="log-entry">
+                            <span class="log-timestamp">--:--:--</span>
+                            <span class="log-level-info">Waiting for processing to start...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+
+        // DOM elements
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const currentPhase = document.getElementById('currentPhase');
+        const overallProgress = document.getElementById('overallProgress');
+        const progressText = document.getElementById('progressText');
+        const progressPercent = document.getElementById('progressPercent');
+        const currentFPS = document.getElementById('currentFPS');
+        const remainingTime = document.getElementById('remainingTime');
+        const currentImage = document.getElementById('currentImage');
+        const algorithmProgress = document.getElementById('algorithmProgress');
+        const previewContainer = document.getElementById('previewContainer');
+        const logContainer = document.getElementById('logContainer');
+        const metricsContent = document.getElementById('metricsContent');
+        
+        // Control elements
+        const algorithmSelection = document.getElementById('algorithmSelection');
+        const startProcessing = document.getElementById('startProcessing');
+        const stopProcessing = document.getElementById('stopProcessing');
+        const startButtonText = document.getElementById('startButtonText');
+        const startIndex = document.getElementById('startIndex');
+        const numImages = document.getElementById('numImages');
+
+        // State management
+        let isProcessing = false;
+        let currentVideoUrl = null;
+        let availableAlgorithms = [];
+
+        // Load available algorithms
+        async function loadAlgorithms() {
+            try {
+                const response = await fetch('/api/algorithms');
+                availableAlgorithms = await response.json();
+                renderAlgorithmSelection();
+            } catch (error) {
+                console.error('Error loading algorithms:', error);
+                algorithmSelection.innerHTML = '<p>Error loading algorithms</p>';
+            }
+        }
+
+        // Render algorithm selection checkboxes
+        function renderAlgorithmSelection() {
+            algorithmSelection.innerHTML = '';
+            
+            availableAlgorithms.forEach(algo => {
+                const checkboxDiv = document.createElement('div');
+                checkboxDiv.className = `algorithm-checkbox ${algo.active ? 'selected' : ''}`;
+                checkboxDiv.setAttribute('data-algorithm', algo.id);
+                
+                checkboxDiv.innerHTML = `
+                    <input type="checkbox" id="${algo.id}" ${algo.active ? 'checked' : ''}>
+                    <label for="${algo.id}">${algo.name}</label>
+                `;
+                
+                algorithmSelection.appendChild(checkboxDiv);
+            });
+        }
+
+        // Update progress display
+        function updateProgress(data) {
+            // Update status
+            statusText.textContent = data.status || 'Unknown';
+            statusDot.className = `status-dot ${data.status}`;
+            currentPhase.textContent = data.current_phase || 'Unknown phase';
+
+            // Update overall progress
+            const processed = data.processed_images || 0;
+            const total = data.total_images || 0;
+            const percent = total > 0 ? (processed / total) * 100 : 0;
+            
+            overallProgress.style.width = `${percent}%`;
+            progressText.textContent = `${processed} / ${total} images`;
+            progressPercent.textContent = `${percent.toFixed(1)}%`;
+
+            // Update stats
+            currentFPS.textContent = (data.current_fps || 0).toFixed(1);
+            
+            if (data.estimated_completion && data.estimated_completion > 0) {
+                const minutes = Math.floor(data.estimated_completion / 60);
+                const seconds = Math.floor(data.estimated_completion % 60);
+                remainingTime.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            } else {
+                remainingTime.textContent = '--';
+            }
+
+            const imgName = data.current_image || '--';
+            currentImage.textContent = imgName.length > 15 ? imgName.substring(0, 15) + '...' : imgName;
+
+            // Update algorithm progress
+            updateAlgorithmProgress(data.algorithms || [], data.algorithm_progress || {});
+
+            // Update preview
+            if (data.preview_image) {
+                previewContainer.innerHTML = `<img src="data:image/jpeg;base64,${data.preview_image}" class="preview-image" alt="Processing Preview">`;
+            } else if (data.preview_video) {
+                if (currentVideoUrl !== data.preview_video) {
+                    currentVideoUrl = data.preview_video;
+                    previewContainer.innerHTML = `
+                        <video class="preview-video" controls autoplay muted>
+                            <source src="${data.preview_video}" type="video/mp4">
+                            Your browser does not support the video tag.
+                        </video>`;
+                }
+            }
+
+            // Update logs
+            updateLogs(data.log_messages || []);
+
+            // Update metrics
+            updateMetrics(data.metrics || {});
+
+            // Update processing state
+            if (data.status === 'running') {
+                setProcessingState(true);
+            } else if (data.status === 'completed' || data.status === 'error') {
+                setProcessingState(false);
+            }
+        }
+
+        function updateAlgorithmProgress(algorithms, progress) {
+            if (algorithms.length === 0) {
+                algorithmProgress.innerHTML = '<p>No algorithms loaded</p>';
+                return;
+            }
+
+            algorithmProgress.innerHTML = '';
+            algorithms.forEach(algo => {
+                const progressPercent = progress[algo] || 0;
+                algorithmProgress.innerHTML += `
+                    <div class="algorithm-item">
+                        <div class="algorithm-name">${algo}</div>
+                        <div class="algorithm-bar">
+                            <div class="algorithm-fill" style="width: ${progressPercent}%"></div>
+                        </div>
+                        <span>${progressPercent.toFixed(1)}%</span>
+                    </div>
+                `;
+            });
+        }
+
+        function updateLogs(logs) {
+            logContainer.innerHTML = '';
+            const recentLogs = logs.slice(-20); // Show last 20 logs
+            
+            recentLogs.forEach(log => {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry';
+                logEntry.innerHTML = `
+                    <span class="log-timestamp">${log.timestamp}</span>
+                    <span class="log-level-${log.level}">${log.message}</span>
+                `;
+                logContainer.appendChild(logEntry);
+            });
+            
+            // Auto-scroll to bottom
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function updateMetrics(metrics) {
+            if (Object.keys(metrics).length === 0) {
+                metricsContent.innerHTML = '<p>Metrics will appear here during processing...</p>';
+                return;
+            }
+
+            let metricsHtml = '<table class="metrics-table"><thead><tr><th>Algorithm</th><th>F1 Score</th><th>FPS</th><th>Precision</th><th>Recall</th></tr></thead><tbody>';
+            
+            Object.keys(metrics).forEach(algo => {
+                const metric = metrics[algo];
+                if (metric.length > 0) {
+                    const avgMetric = metric.reduce((acc, m) => {
+                        acc.f1_score += m.f1_score || 0;
+                        acc.precision += m.precision || 0;
+                        acc.recall += m.recall || 0;
+                        return acc;
+                    }, { f1_score: 0, precision: 0, recall: 0 });
+                    
+                    const count = metric.length;
+                    metricsHtml += `
+                        <tr>
+                            <td>${algo}</td>
+                            <td>${(avgMetric.f1_score / count).toFixed(3)}</td>
+                            <td>--</td>
+                            <td>${(avgMetric.precision / count).toFixed(3)}</td>
+                            <td>${(avgMetric.recall / count).toFixed(3)}</td>
+                        </tr>
+                    `;
+                }
+            });
+            
+            metricsHtml += '</tbody></table>';
+            metricsContent.innerHTML = metricsHtml;
+        }
+
+        // Control functions
+        function getSelectedAlgorithms() {
+            const checkboxes = algorithmSelection.querySelectorAll('input[type="checkbox"]:checked');
+            return Array.from(checkboxes).map(cb => cb.id);
+        }
+
+        function setProcessingState(processing) {
+            isProcessing = processing;
+            startProcessing.disabled = processing;
+            stopProcessing.disabled = !processing;
+            startButtonText.textContent = processing ? 'Processing...' : 'Start Lane Detection';
+            
+            // Disable/enable algorithm selection during processing
+            const checkboxes = algorithmSelection.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(cb => cb.disabled = processing);
+            
+            // Disable/enable input fields during processing
+            startIndex.disabled = processing;
+            numImages.disabled = processing;
+        }
+
+        function startLaneDetection() {
+            const selectedAlgorithms = getSelectedAlgorithms();
+            if (selectedAlgorithms.length === 0) {
+                alert('Please select at least one algorithm!');
+                return;
+            }
+
+            const params = {
+                algorithms: selectedAlgorithms,
+                start_index: parseInt(startIndex.value),
+                num_images: parseInt(numImages.value)
+            };
+
+            fetch('/api/start_processing', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(params)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('Processing started successfully');
+                    setProcessingState(true);
+                } else {
+                    alert('Failed to start processing: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error starting processing:', error);
+                alert('Error starting processing: ' + error.message);
+            });
+        }
+
+        function stopLaneDetection() {
+            fetch('/api/stop_processing', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('Processing stopped successfully');
+                    setProcessingState(false);
+                } else {
+                    alert('Failed to stop processing: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error stopping processing:', error);
+                alert('Error stopping processing: ' + error.message);
+            });
+        }
+
+        // Socket.IO event handlers
+        socket.on('progress_update', updateProgress);
+
+        socket.on('connect', () => {
+            console.log('Connected to dashboard');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from dashboard');
+        });
+
+        // Event listeners
+        startProcessing.addEventListener('click', startLaneDetection);
+        stopProcessing.addEventListener('click', stopLaneDetection);
+
+        // Algorithm selection handling
+        algorithmSelection.addEventListener('click', (e) => {
+            if (e.target.classList.contains('algorithm-checkbox') || e.target.parentElement.classList.contains('algorithm-checkbox')) {
+                const checkbox = e.target.classList.contains('algorithm-checkbox') ? 
+                    e.target : e.target.parentElement;
+                const input = checkbox.querySelector('input[type="checkbox"]');
+                
+                if (!input.disabled) {
+                    input.checked = !input.checked;
+                    checkbox.classList.toggle('selected', input.checked);
+                }
+            }
+        });
+
+        // Initialize algorithm selection state
+        loadAlgorithms();
+
+        // Initial load
+        fetch('/api/progress')
+            .then(response => response.json())
+            .then(data => updateProgress(data))
+            .catch(error => console.error('Error fetching initial progress:', error));
+    </script>
+</body>
+</html>

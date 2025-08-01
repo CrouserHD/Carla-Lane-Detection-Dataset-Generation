@@ -349,6 +349,20 @@ def parse_command_line_arguments(cfg_module):
             f"MAX_IMAGES_TO_PROCESS: {val_max_images if val_max_images is not None else 'N/A'})"
         )
     )
+    
+    # Dashboard-related arguments
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Enable dashboard integration for real-time monitoring"
+    )
+    
+    parser.add_argument(
+        "--algorithm",
+        action="append",
+        help="Specify algorithms to use (can be used multiple times)"
+    )
+    
     return parser.parse_args()
 
 def define_roi_vertices_from_config(image_shape, cfg_module):

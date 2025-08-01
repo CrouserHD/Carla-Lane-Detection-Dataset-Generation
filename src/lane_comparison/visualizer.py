@@ -145,15 +145,17 @@ def create_comparison_image(original_image_cv2, detected_lanes_by_algo, gt_lanes
 def save_image(image, output_dir, filename):
     if image is None:
         logger.error(f"Error: Attempted to save a None image as {filename} in {output_dir}")
-        return
+        return None
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, filename)
     try:
         cv2.imwrite(output_path, image)
+        return output_path  # Return the path of the saved image
     except Exception as e:
         logger.error(f"Error saving image {output_path}: {e}", exc_info=True)
         if hasattr(image, 'shape') and hasattr(image, 'dtype'):
             logger.debug(f"Image shape: {image.shape}, dtype: {image.dtype}")
         else:
             logger.debug("Image shape or dtype not available.")
+        return None
