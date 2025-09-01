@@ -73,7 +73,7 @@ ALGORITHMS_TO_RUN = [
     {
         "module_name": "lanenet_algorithm",
         "function_name": "detect_lanes_lanenet",
-        "active": False,
+        "active": True,
         "color": (0, 0, 0), # Changed to black for better visibility
         "display_name": "LaneNet",
         "params": { # Algorithm-specific parameters

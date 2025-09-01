@@ -7,8 +7,8 @@ Quantitative Metrics Summary:
     Avg False Positives: 0.16
     Avg False Negatives: 1.19
     Avg X Diff (matched pts): 4.31 px
-    Avg Execution Time per Image: 0.0037 seconds
-    Avg FPS: 273.50
+    Avg Execution Time per Image: 0.0030 seconds
+    Avg FPS: 330.99
     Total Images Processed for this algo: 70
 
   Algorithm: Adv. Sliding Window
@@ -19,7 +19,19 @@ Quantitative Metrics Summary:
     Avg False Positives: 0.50
     Avg False Negatives: 1.50
     Avg X Diff (matched pts): 3.78 px
-    Avg Execution Time per Image: 0.0110 seconds
-    Avg FPS: 90.70
+    Avg Execution Time per Image: 0.0091 seconds
+    Avg FPS: 109.57
+    Total Images Processed for this algo: 70
+
+  Algorithm: LaneNet
+    Avg F1 Score: 0.906
+    Avg Precision: 0.893
+    Avg Recall: 0.929
+    Avg True Positives: 2.79
+    Avg False Positives: 0.39
+    Avg False Negatives: 0.21
+    Avg X Diff (matched pts): 5.49 px
+    Avg Execution Time per Image: 0.3881 seconds
+    Avg FPS: 2.58
     Total Images Processed for this algo: 70
 
